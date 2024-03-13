@@ -48,9 +48,13 @@
   - [Data Access Objects (DAO)](#data-access-objects-dao)
     - [Setup DAO](#setup-dao)
       - [Integration Test DAO with H2 In-Memory DB](#integration-test-dao-with-h2-in-memory-db)
-    - [Creating DAOs](#creating-daos)
+    - [Creating DAOs (Create Method)](#creating-daos-create-method)
       - [Author](#author)
       - [Book](#book)
+    - [Reading DAOs (Read/Find Method)](#reading-daos-readfind-method)
+    - [Read/Find One](#readfind-one)
+      - [Author](#author-1)
+      - [Book](#book-1)
 - [Spring Boot 3 - Amigoscode](#spring-boot-3---amigoscode)
   - [Spring Initializr](#spring-initializr-1)
   - [Project Setup](#project-setup)
@@ -1509,18 +1513,17 @@ class DatabaseApplicationTests {
 }
 ```
 
-### Creating DAOs
+### Creating DAOs (Create Method)
 
 - Create
-  - `src/test/java/com.devtiro.database/dao` folder
-  - `src/test/java/com/devtiro/database/dao/AuthorDaoImplTests.java` for unit tests
-  - `src/test/java/com/devtiro/database/dao/BookDaoImplTests.java` for unit tests
+  - `src/test/java/com.devtiro.database/dao/impl` folder
+  - `src/test/java/com/devtiro/database/dao/impl/AuthorDaoImplTests.java` for unit tests
+  - `src/test/java/com/devtiro/database/dao/impl/BookDaoImplTests.java` for unit tests
 - Note:
   - Use `mockito` to mock data
   - By using the Mockito Extension and putting `@InjectMocks` annotation/decorator above the `AuthorDaoImpl` variable and putting `@Mock` on the `JdbcTemplate` variable: before each test is run a new instance of the `AuthorDaoImpl` is created for us and then a mock of the dependencies/collaborators (i.e. the `JdbcTemplate` in this case) is created and then injected into the `AuthorDaoImpl` class
   - `verify()` is Mockito's implementation of `assert()` (i.e. `verify() == assert()`)
-    - We want to verify that a certain method is called on the `JdbcTemplate` with a particular set of arguments
-    - The method in this case is `update`
+    - We want to verify that a certain method (i.e. `update` in this case) is called on the `JdbcTemplate` with a particular set of arguments
     - Quirk of Mockito is that we need to use matches (i.e. `eq()`) instead of the raw values
 
 #### Author
@@ -1562,7 +1565,7 @@ public class AuthorDaoImpl implements AuthorDao {
 ```
 
 ```java
-// src/test/java/com/devtiro/database/dao/AuthorDaoImplTests.java
+// src/test/java/com/devtiro/database/dao/impl/AuthorDaoImplTests.java
 package com.devtiro.database.dao;
 
 import com.devtiro.database.dao.impl.AuthorDaoImpl;
@@ -1644,7 +1647,7 @@ public class BookDaoImpl implements BookDao {
 ```
 
 ```java
-// src/test/java/com/devtiro/database/dao/BookDaoImplTests.java
+// src/test/java/com/devtiro/database/dao/impl/BookDaoImplTests.java
 package com.devtiro.database.dao;
 
 import com.devtiro.database.dao.impl.BookDaoImpl;
@@ -1686,6 +1689,145 @@ public class BookDaoImplTests {
   }
 }
 ```
+
+### Reading DAOs (Read/Find Method)
+
+- Typically READ methods are broken up into `readOne` and `readyMany` methods
+  - readOne(id) returns SINGLE object or `null`
+  - readMany() returns list of all entities or empty list
+
+### Read/Find One
+
+- Note: We wrap our return values in `Optional` for extra type safety
+  - If value does NOT exist in db then return value will be `Optional.empty`
+- Note: Because we are using JDBC and DAO pattern, we need to handle the conversion to and from SQL and Java Objects ourselves
+  - Several methods: row mappers, result extractors, row callback handlers
+  - We will use a "row mapper"
+- The row mapper is used to convert from a result set (what is returned when we query the db) to a Java object
+
+#### Author
+
+```java
+// src/main/java/com/devtiro/database/dao/AuthorDao.java
+package com.devtiro.database.dao;
+
+import com.devtiro.database.domain.Author;
+
+import java.util.Optional;
+
+public interface AuthorDao {
+  void create(Author author);
+  Optional<Author> findOne(long l);
+}
+```
+
+```java
+// src/main/java/com/devtiro/database/dao/impl/AuthorDaoImpl.java
+package com.devtiro.database.dao.impl;
+
+import com.devtiro.database.dao.AuthorDao;
+import com.devtiro.database.domain.Author;
+import com.devtiro.database.domain.Book;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Optional;
+
+public class AuthorDaoImpl implements AuthorDao {
+
+  private final JdbcTemplate jdbcTemplate;
+
+  public AuthorDaoImpl(final JdbcTemplate jdbcTemplate) {
+    this.jdbcTemplate = jdbcTemplate;
+  }
+
+  @Override
+  public void create(Author author) {
+    jdbcTemplate.update(
+        "INSERT INTO authors (id, name, age) VALUES (?, ?, ?)",
+        author.getId(), author.getName(), author.getAge());
+  }
+
+  @Override
+  public Optional<Author> findOne(long authorId) {
+    List<Author> results = jdbcTemplate.query(
+        "SELECT id, name, age FROM authors WHERE id = ? LIMIT 1",
+        new AuthorRowMapper(), authorId);
+
+    return results.stream().findFirst();
+  }
+
+  public static class AuthorRowMapper implements RowMapper<Author> {
+    @Override
+    public Author mapRow(ResultSet rs, int rowNum) throws SQLException {
+      return Author.builder()
+          .id(rs.getLong("id"))
+          .name(rs.getString("name"))
+          .age(rs.getInt("age"))
+          .build();
+    }
+  }
+}
+```
+
+```java
+// src/test/java/com/devtiro/database/dao/impl/AuthorDaoImplTests.java
+package com.devtiro.database.dao.impl;
+
+import com.devtiro.database.dao.impl.AuthorDaoImpl;
+import com.devtiro.database.domain.Author;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+
+import static org.hamcrest.Matchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+
+@ExtendWith(MockitoExtension.class)
+public class AuthorDaoImplTests {
+
+  @Mock
+  private JdbcTemplate jdbcTemplate;
+
+  @InjectMocks
+  private AuthorDaoImpl underTest;
+
+  @Test
+  public void testThatCreateAuthorGeneratesCorrectSql() {
+    Author author = Author.builder()
+        .id(1L)
+        .name("Steve Jobs")
+        .age(56)
+        .build();
+
+    underTest.create(author);
+
+    verify(jdbcTemplate).update(
+        eq("INSERT INTO authors (id, name, age) VALUES (?, ?, ?)"),
+        eq(1L), eq("Steve Jobs"), eq(56));
+  }
+
+  @Test
+  public void testThatFindOneGeneratesTheCorrectSql() {
+    underTest.findOne(1L);
+    verify(jdbcTemplate).query(
+        eq("SELECT id, name, age FROM authors WHERE id = ? LIMIT 1"),
+        ArgumentMatchers.<AuthorDaoImpl.AuthorRowMapper>any(),
+        eq(1L));
+  }
+}
+```
+
+#### Book
 
 # Spring Boot 3 - Amigoscode
 
